@@ -19,8 +19,10 @@ use tracing::info;
 
 use crate::grpc::ServerResultExt;
 use crate::grpc::extract_correlation_id;
+use crate::grpc::get_authorization;
 use crate::grpc::get_repository;
 use crate::grpc::get_user_id;
+use crate::grpc::link_read_authorizer;
 use crate::util::setup_execution;
 
 #[tracing::instrument(name = "RevisionTree::handle", skip_all)]
@@ -31,6 +33,7 @@ pub async fn handler(
 ) -> Result<Response<RevisionTreeResponse>, Status> {
     let repository = get_repository(request.metadata())?;
     let user_id = get_user_id(request.extensions());
+    let authorization = get_authorization(request.extensions()).ok();
     let correlation_id = extract_correlation_id(&request).unwrap_or_default();
     let req = request.into_inner();
     let revision = req.revision.into();
@@ -53,10 +56,11 @@ pub async fn handler(
         mutable_store,
         repository,
     ));
+    let can_read = link_read_authorizer(authorization);
 
     LORE_CONTEXT
         .scope(execution, async move {
-            tree(repository.clone(), revision, path, max_depth)
+            tree(repository.clone(), revision, path, max_depth, can_read)
                 .await
                 .map(|result| {
                     debug!("Got tree");
@@ -259,6 +263,113 @@ mod tests {
                     .expect_err("Expected NotFound for non-existent path");
                 assert_eq!(err.code(), tonic::Code::NotFound);
                 assert_eq!(err.message(), "A node in the tree could not be found");
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn tree_emits_link_node_with_target_repository_context() {
+        use lore_base::types::Address;
+        use lore_proto::PathType;
+
+        let repository_id = random::<Context>();
+        let target_repo = random::<Context>();
+        let target_revision = Hash::from(random::<[u8; 32]>());
+        let (immutable_store, mutable_store, execution) =
+            test_store_create().await.expect("Failed to create stores");
+        #[allow(clippy::large_futures)]
+        LORE_CONTEXT
+            .scope(execution.clone(), async move {
+                let write_token = get_write_token();
+                let repository = Arc::new(RepositoryContext::new_server_context(
+                    immutable_store.clone(),
+                    mutable_store.clone(),
+                    repository_id.into(),
+                ));
+
+                let main = lore_revision::branch::create(
+                    repository.clone(),
+                    &write_token,
+                    Context::from(uuid::Uuid::now_v7()),
+                    lore_revision::branch::DEFAULT_DEFAULT_NAME,
+                    lore_revision::branch::default_category(),
+                    "TestCreator",
+                    12345,
+                    vec![],
+                    false,
+                    false,
+                )
+                .await
+                .expect("Could not create main branch");
+
+                let state = state::State::new();
+                state.set_parent_self(Hash::default());
+                state.set_revision_number(1);
+
+                let link_node = Node {
+                    flags: NodeFlags::Link.bits(),
+                    child: ROOT_NODE,
+                    address: Address {
+                        hash: target_revision,
+                        context: target_repo,
+                    },
+                    name_hash: hash_string("linked"),
+                    ..Default::default()
+                };
+                state
+                    .node_add(repository.clone(), ROOT_NODE, link_node, "linked")
+                    .await
+                    .expect("Failed to add link node");
+
+                let revision_hash = state
+                    .serialize(repository.clone(), &write_token)
+                    .await
+                    .expect("Failed to serialize state");
+
+                branch_push::push(
+                    repository.clone(),
+                    main,
+                    revision_hash,
+                    true,
+                    true,
+                    false,
+                    DEFAULT_HISTORY_STEP_SIZE,
+                    crate::grpc::server::RevisionListAcceleration::default(),
+                )
+                .await
+                .expect("Failed to push revision");
+
+                let mut request = Request::new(RevisionTreeRequest {
+                    revision: revision_hash.into(),
+                    path: String::new(),
+                    max_depth: 10,
+                });
+                request.metadata_mut().insert_bin(
+                    REPOSITORY_ID_KEY,
+                    tonic::metadata::BinaryMetadataValue::from_bytes(repository.id.data()),
+                );
+                let response = handler(request, immutable_store.clone(), mutable_store.clone())
+                    .await
+                    .expect("handler ok");
+                let paths = response.into_inner().paths;
+
+                assert_eq!(
+                    paths.len(),
+                    1,
+                    "expected exactly the link entry, got {paths:?}"
+                );
+                let link_path = &paths[0];
+                assert_eq!(link_path.path, "linked");
+                assert_eq!(link_path.r#type, PathType::Link as i32);
+                let address: Address = (&link_path.address).into();
+                assert_eq!(
+                    address.hash, target_revision,
+                    "link.address.hash should be the linked revision signature",
+                );
+                assert_eq!(
+                    address.context, target_repo,
+                    "link.address.context should be the target repository id",
+                );
             })
             .await;
     }

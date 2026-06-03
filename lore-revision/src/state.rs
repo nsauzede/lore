@@ -3188,63 +3188,123 @@ pub struct TreePath {
     pub flags: NodeFlags,
 }
 
+pub type CanReadRepository = Arc<dyn Fn(RepositoryId) -> bool + Send + Sync>;
+
+pub fn allow_all_repositories() -> CanReadRepository {
+    Arc::new(|_| true)
+}
+
+const MAX_LINK_DEPTH: usize = 8;
+
 pub async fn gather_tree_paths(
     state: Arc<State>,
     repository: Arc<RepositoryContext>,
     path: RelativePath,
     max_depth: usize,
+    can_read: CanReadRepository,
 ) -> Result<Vec<TreePath>, StateError> {
-    let mut paths: Vec<TreePath> = Vec::new();
-    let mut block_index = 0; // defaults to root node
-    let mut node_index = 0; // defaults to first child on the root node
-    let mut parent_node_id: NodeID = ROOT_NODE;
-    if !path.is_empty() {
-        // TODO(vri): Links
+    let (walk_state, walk_repository, parent_node_id) = if path.is_empty() {
+        (state, repository, ROOT_NODE)
+    } else {
         let node_link = state
             .find_node_link(repository.clone(), path.as_str())
             .await?;
         if !node_link.is_valid() {
-            return Err(StateError::internal("Invalid node"));
+            return Err(NodeNotFound.into());
         }
-        parent_node_id = node_link.node;
-        block_index = NodeBlock::index(node_link.node);
-        node_index = Node::index(node_link.node);
-        lore_trace!(
-            "Subpath filtered: {}, block index: {}, node index: {}",
-            path.as_str(),
-            block_index,
-            node_index
-        );
-    }
-    let block = state.block(repository.clone(), block_index).await?;
-    if !block.node(node_index).is_directory() {
-        return Err(InvalidPath {
-            path: path.to_string(),
+        if !can_read(node_link.repository) {
+            lore_debug!(
+                "Path resolution stops at unauthorized repository {}",
+                node_link.repository,
+            );
+            return Err(NodeNotFound.into());
         }
-        .into());
-    }
-    let mut node_id_ref = block.node(node_index).child();
-    let mut cycle = SiblingCycleGuard::new(parent_node_id);
-    while let Some(node_id) = node_id_ref {
-        node_id_ref = gather_tree_paths_node(
-            state.clone(),
-            repository.clone(),
-            node_id,
-            parent_node_id,
-            path.clone(),
-            0,
-            max_depth,
-            &mut paths,
-            &mut cycle,
-        )
-        .await?;
-    }
+        if node_link.revision == state.revision() {
+            (state, repository, node_link.node)
+        } else {
+            let linked_repo = Arc::new(repository.to_link_context(node_link.repository).await);
+            let linked_state = State::deserialize(linked_repo.clone(), node_link.revision).await?;
+            (linked_state, linked_repo, node_link.node)
+        }
+    };
 
+    let mut paths: Vec<TreePath> = Vec::new();
+    enumerate_children(
+        walk_state,
+        walk_repository,
+        parent_node_id,
+        path,
+        0,
+        max_depth,
+        0,
+        can_read,
+        &mut paths,
+    )
+    .await?;
     Ok(paths)
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn gather_tree_paths_node(
+async fn enumerate_children(
+    state: Arc<State>,
+    repository: Arc<RepositoryContext>,
+    parent_node_id: NodeID,
+    parent_path: RelativePath,
+    depth: usize,
+    max_depth: usize,
+    link_depth: usize,
+    can_read: CanReadRepository,
+    result: &mut Vec<TreePath>,
+) -> Result<(), StateError> {
+    let block_index = NodeBlock::index(parent_node_id);
+    let node_index = Node::index(parent_node_id);
+    let block = state.block(repository.clone(), block_index).await?;
+    let parent = block.node(node_index);
+    if !parent.is_directory() {
+        return Err(InvalidPath {
+            path: parent_path.to_string(),
+        }
+        .into());
+    }
+    let mut cycle = SiblingCycleGuard::new(parent_node_id);
+    gather_tree_paths_node_recurse(
+        state,
+        repository,
+        parent.child(),
+        parent_node_id,
+        parent_path,
+        depth,
+        max_depth,
+        link_depth,
+        can_read,
+        result,
+        &mut cycle,
+    )
+    .await
+}
+
+fn log_linked_subtree_failure(
+    prefix: &str,
+    repository: RepositoryId,
+    revision: Hash,
+    err: &StateError,
+) {
+    match err {
+        StateErrors::NotFound(_)
+        | StateErrors::NodeNotFound(_)
+        | StateErrors::LinkNotFound(_)
+        | StateErrors::RevisionNotFound(_)
+        | StateErrors::AddressNotFound(_) => {
+            lore_debug!("{prefix} at {repository} @ {revision}: {err}");
+        }
+        _ => {
+            lore_warn!("{prefix} at {repository} @ {revision}: {err}");
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn gather_tree_paths_node(
     state: Arc<State>,
     repository: Arc<RepositoryContext>,
     node_id: NodeID,
@@ -3252,6 +3312,8 @@ pub async fn gather_tree_paths_node(
     parent_path: RelativePath,
     depth: usize,
     max_depth: usize,
+    link_depth: usize,
+    can_read: CanReadRepository,
     result: &mut Vec<TreePath>,
     cycle: &mut SiblingCycleGuard,
 ) -> Result<Option<NodeID>, StateError> {
@@ -3262,43 +3324,88 @@ pub async fn gather_tree_paths_node(
         .await?;
     let node = block.node(node_index);
     node.walk_step(node_id, expected_parent, cycle)?;
-    {
-        let node_name = block.node_name_ref(node_index).internal("Node name")?;
-        let node_path = if parent_path.is_empty() {
-            RelativePath::new_from_initial_path(node_name).unwrap_or_default()
-        } else {
-            parent_path.push_into_buf(node_name).freeze()
-        };
 
-        if node.is_directory() {
-            result.push(TreePath {
-                path: node_path.clone(),
-                address: None,
-                flags: NodeFlags::NoFlags,
-            });
-        } else if node.is_file() {
-            result.push(TreePath {
-                path: node_path.clone(),
-                address: Some(node.address),
-                flags: NodeFlags::File,
-            });
-        };
-        if node.is_directory() && ((max_depth == 0) || (depth + 1 < max_depth)) {
-            let mut child_node_ref = node.child();
-            let mut child_cycle = SiblingCycleGuard::new(node_id);
-            while let Some(child_node_id) = child_node_ref {
-                let fut = gather_tree_paths_node_recurse(
-                    state.clone(),
-                    repository.clone(),
-                    child_node_id,
-                    node_id,
-                    node_path.clone(),
-                    depth + 1,
-                    max_depth,
-                    result,
-                    &mut child_cycle,
-                );
-                child_node_ref = fut.await?;
+    let node_name = block.node_name_ref(node_index).internal("Node name")?;
+    let node_path = if parent_path.is_empty() {
+        RelativePath::new_from_initial_path(node_name).unwrap_or_default()
+    } else {
+        parent_path.push_into_buf(node_name).freeze()
+    };
+    let address = if node.is_directory() {
+        None
+    } else {
+        Some(node.address)
+    };
+    let flags = if node.is_file() {
+        NodeFlags::File
+    } else if node.is_link() {
+        NodeFlags::Link
+    } else {
+        NodeFlags::NoFlags
+    };
+    result.push(TreePath {
+        path: node_path.clone(),
+        address,
+        flags,
+    });
+
+    let depth_remaining = max_depth == 0 || depth + 1 < max_depth;
+    if node.is_directory() && depth_remaining {
+        let mut child_cycle = SiblingCycleGuard::new(node_id);
+        gather_tree_paths_node_recurse(
+            state.clone(),
+            repository.clone(),
+            node.child(),
+            node_id,
+            node_path,
+            depth + 1,
+            max_depth,
+            link_depth,
+            can_read,
+            result,
+            &mut child_cycle,
+        )
+        .await?;
+    } else if node.is_link() && depth_remaining && link_depth < MAX_LINK_DEPTH {
+        let link = node.linked_node();
+        if !can_read(link.repository) {
+            lore_debug!(
+                "Skipping linked subtree: caller not authorized for repository {}",
+                link.repository,
+            );
+        } else {
+            let linked_repo = Arc::new(repository.to_link_context(link.repository).await);
+            match State::deserialize(linked_repo.clone(), link.revision).await {
+                Ok(linked_state) => {
+                    if let Err(err) = enumerate_children(
+                        linked_state,
+                        linked_repo,
+                        link.node,
+                        node_path,
+                        depth + 1,
+                        max_depth,
+                        link_depth + 1,
+                        can_read,
+                        result,
+                    )
+                    .await
+                    {
+                        log_linked_subtree_failure(
+                            "Aborting linked subtree",
+                            link.repository,
+                            link.revision,
+                            &err,
+                        );
+                    }
+                }
+                Err(err) => {
+                    log_linked_subtree_failure(
+                        "Skipping linked subtree: cannot load state",
+                        link.repository,
+                        link.revision,
+                        &err,
+                    );
+                }
             }
         }
     }
@@ -3307,28 +3414,39 @@ pub async fn gather_tree_paths_node(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn gather_tree_paths_node_recurse<'a>(
+fn gather_tree_paths_node_recurse<'a>(
     state: Arc<State>,
     repository: Arc<RepositoryContext>,
-    node_id: NodeID,
+    first_child: Option<NodeID>,
     expected_parent: NodeID,
     parent_path: RelativePath,
     depth: usize,
     max_depth: usize,
+    link_depth: usize,
+    can_read: CanReadRepository,
     result: &'a mut Vec<TreePath>,
     cycle: &'a mut SiblingCycleGuard,
-) -> Pin<Box<dyn Future<Output = Result<Option<NodeID>, StateError>> + Send + 'a>> {
-    Box::pin(gather_tree_paths_node(
-        state,
-        repository,
-        node_id,
-        expected_parent,
-        parent_path,
-        depth,
-        max_depth,
-        result,
-        cycle,
-    ))
+) -> Pin<Box<dyn Future<Output = Result<(), StateError>> + Send + 'a>> {
+    Box::pin(async move {
+        let mut next = first_child;
+        while let Some(node_id) = next {
+            next = gather_tree_paths_node(
+                state.clone(),
+                repository.clone(),
+                node_id,
+                expected_parent,
+                parent_path.clone(),
+                depth,
+                max_depth,
+                link_depth,
+                can_read.clone(),
+                result,
+                cycle,
+            )
+            .await?;
+        }
+        Ok(())
+    })
 }
 
 /// Discard a single node and patch the parent/sibling hierarchy links

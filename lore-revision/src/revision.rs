@@ -996,6 +996,7 @@ pub async fn tree(
     revision: Hash,
     path: RelativePath,
     max_depth: usize,
+    can_read: crate::state::CanReadRepository,
 ) -> Result<TreeResult, StateError> {
     lore_debug!(
         "Gathering tree in repository {} revision: {} path: {}",
@@ -1004,7 +1005,7 @@ pub async fn tree(
         path.as_str()
     );
     let state = State::deserialize(repository.clone(), revision).await?;
-    let paths = gather_tree_paths(state, repository, path, max_depth).await?;
+    let paths = gather_tree_paths(state, repository, path, max_depth, can_read).await?;
     Ok(TreeResult { paths })
 }
 

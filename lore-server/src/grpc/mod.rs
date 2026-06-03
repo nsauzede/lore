@@ -17,6 +17,7 @@ pub mod storage_service;
 pub mod thinclient;
 
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 mod replication_server;
 mod replication_service;
@@ -49,6 +50,7 @@ use tracing::warn;
 
 use crate::auth::jwt::AuthorizationToken;
 use crate::auth::jwt::ResourcePermission;
+use crate::auth::jwt::verify_authorization;
 use crate::hooks::traits::HookError;
 use crate::hooks::traits::StatusCode;
 use crate::protocol::attribute_map::AttributeMap;
@@ -119,6 +121,17 @@ pub fn get_authorization(extensions: &Extensions) -> Result<AuthorizationToken, 
     match extensions.get::<AuthorizationToken>() {
         Some(auth) => Ok(auth.clone()),
         None => Err(Status::unauthenticated("Missing authorization")),
+    }
+}
+
+pub fn link_read_authorizer(
+    authorization: Option<AuthorizationToken>,
+) -> lore_revision::state::CanReadRepository {
+    match authorization {
+        Some(token) => {
+            Arc::new(move |repository_id| verify_authorization(&token, repository_id).is_ok())
+        }
+        None => lore_revision::state::allow_all_repositories(),
     }
 }
 
