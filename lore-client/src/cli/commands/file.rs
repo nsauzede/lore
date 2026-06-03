@@ -221,6 +221,14 @@ pub struct FileInfoArgs {
     pub filtered: bool,
 }
 
+/// Parse the `--context`/`-U` value, rejecting non-numeric and negative input
+/// with one clear, actionable message. `u32::from_str` yields the unhelpful
+/// "invalid digit found in string", and negatives must be caught explicitly.
+fn parse_context_lines(s: &str) -> Result<u32, String> {
+    s.parse::<u32>()
+        .map_err(|_err| format!("expected a non-negative integer; got '{s}'"))
+}
+
 #[derive(Args)]
 pub struct FileDiffArgs {
     /// Optional signature of the source revision to diff from, by default the current revision
@@ -236,7 +244,14 @@ pub struct FileDiffArgs {
     diff3: bool,
 
     /// Number of unchanged context lines to show around each hunk
-    #[clap(long, short = 'U', value_name = "n", default_value_t = DEFAULT_CONTEXT_LINES)]
+    #[clap(
+        long,
+        short = 'U',
+        value_name = "n",
+        default_value_t = DEFAULT_CONTEXT_LINES,
+        value_parser = parse_context_lines,
+        allow_negative_numbers = true
+    )]
     context: u32,
 
     /// Treat lines that differ only in trailing whitespace as unchanged
@@ -1830,5 +1845,45 @@ pub fn handle_file_commands(cmd: &FileCommands, globals: LoreGlobalArgs) -> u8 {
         FileCommands::Dump(args) => {
             return handle_file_dump(globals, args);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_context_lines;
+
+    #[test]
+    fn rejects_non_numeric() {
+        assert_eq!(
+            parse_context_lines("abc").unwrap_err(),
+            "expected a non-negative integer; got 'abc'"
+        );
+    }
+
+    #[test]
+    fn rejects_negative() {
+        assert_eq!(
+            parse_context_lines("-1").unwrap_err(),
+            "expected a non-negative integer; got '-1'"
+        );
+    }
+
+    #[test]
+    fn accepts_valid() {
+        assert_eq!(parse_context_lines("5").unwrap(), 5);
+    }
+
+    /// Verify `-1` reaches the value parser (rather than being rejected as an
+    /// unexpected argument), which is the behavior `allow_negative_numbers` enables.
+    #[test]
+    fn diff_negative_context_reaches_parser() {
+        use clap::Parser;
+        let result =
+            crate::cli::LoreCli::try_parse_from(["lore", "diff", "-U", "-1", "original.txt"]);
+        let err = result
+            .err()
+            .expect("expected -U -1 to be rejected")
+            .to_string();
+        assert!(err.contains("non-negative integer"), "got: {err}");
     }
 }

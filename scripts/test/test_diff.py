@@ -5,6 +5,7 @@ import os
 
 import pytest
 
+from error_types import ImproperArgumentsError
 from lore import Lore
 from lore_parsers import parse_status_json
 
@@ -530,6 +531,43 @@ def test_file_diff_context(new_lore_repo):
         + "\nExplicit:\n"
         + explicit_three_output
     )
+
+
+@pytest.mark.smoke
+def test_file_diff_invalid_context(new_lore_repo):
+    """Invalid --context / -U values produce one clear, actionable error.
+
+    Both non-numeric and negative input must report 'expected a non-negative
+    integer' and echo the offending value, instead of Rust's internal
+    'invalid digit found in string' or clap's misleading 'unexpected argument'
+    tip for the negative case.
+    """
+    repo: Lore = new_lore_repo()
+
+    test_file = "ctx.txt"
+    repo.write_commit_push(
+        "Add file for context validation",
+        {test_file: ["Line 1\n", "Line 2\n"]},
+        offline=True,
+    )
+
+    for bad in ["abc", "-1", "1.5"]:
+        with pytest.raises(
+            ImproperArgumentsError, match="expected a non-negative integer"
+        ) as exc_info:
+            repo.file_diff(test_file, context=bad, offline=True)
+
+        message = str(exc_info.value)
+        assert f"got '{bad}'" in message, (
+            f"--context {bad!r} error should echo the offending value\n"
+            f"Output:\n{message}"
+        )
+        # The negative case must reach the value parser, not be rejected as an
+        # unrelated argument with the misleading '-- -1' tip.
+        assert "unexpected argument" not in message, (
+            f"--context {bad!r} should not be treated as an unexpected argument\n"
+            f"Output:\n{message}"
+        )
 
 
 @pytest.mark.smoke

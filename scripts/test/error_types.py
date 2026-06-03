@@ -165,6 +165,7 @@ ERROR_MAP: list[tuple[str | re.Pattern, type[LoreException]]] = [
     ("Failed to connect to repo", ServerConnectionError),
     ("Repository already exist", RepositoryAlreadyExistsError),
     (re.compile(r"error: the argument.*cannot be used with"), ImproperArgumentsError),
+    ("expected a non-negative integer", ImproperArgumentsError),
     ("Repository not found", UninitializedRepositoryError),
     ("Failed to find revision", RevisionNotFound),
     ("revision not found:", RevisionNotFound),
