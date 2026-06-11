@@ -72,7 +72,7 @@ Lore is an open source version control system designed for unprecedented scalabi
 
 ## Lore's architecture
 
-Lore is a centralized, content-addressed version control system that represents repository state as Merkle trees and an immutable revision chain, optimized for binary-first storage, deduplication, and sparse/on-demand data hydration at scale. For the full model—on-disk formats, chunking internals, and the mechanics of the Merkle tree—read the [technical design doc](docs/explanation/technical-design.md).
+Lore is a centralized, content-addressed version control system that represents repository state as Merkle trees and an immutable revision chain, optimized for binary-first storage, deduplication, and sparse/on-demand data hydration at scale. For the full model—on-disk formats, chunking internals, and the mechanics of the Merkle tree—read the [system design doc](docs/explanation/system-design.md).
 
 ### Highlights
 

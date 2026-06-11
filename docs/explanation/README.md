@@ -8,7 +8,7 @@ Explanation is the *why* of Lore. These pages make connections, give context, an
 
 ## What you'll find here
 
-- [Technical design](technical-design.md) — the rationale, goals, and full architecture of Lore in one document: why Lore exists and the problems it solves, the revision graph and content-addressed storage, and the on-disk formats and protocols.
+- [System design](system-design.md) — the rationale, goals, and full architecture of Lore in one document: why Lore exists and the problems it solves, the revision graph and content-addressed storage, and the on-disk formats and protocols.
 
 ## Suggested starting points
 
