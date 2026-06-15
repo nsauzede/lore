@@ -48,6 +48,9 @@
 
 Lore is an open source version control system designed for unprecedented scalability of both data and teams. It is optimized for projects that combine code with large binary assets, including games and entertainment, and caters for the needs of developers and artists alike.
 
+> [!NOTE]
+> Lore is pre-1.0 and under active development. Interfaces, on-disk formats, and APIs may change between releases.
+
 <sub><a href="#readme-top">(back to top)</a></sub>
 
 ## Get started with Lore
@@ -56,6 +59,20 @@ Lore is an open source version control system designed for unprecedented scalabi
 - **Read the docs** — delve into Lore's ethos and architecture in the [Lore documentation](docs/README.md).
 - **Have questions?** — the [FAQ](docs/faq.md) covers licensing, supported platforms, production readiness, and how Lore compares to other version control systems.
 - **Join the conversation** — chat with us and our community on [Discord](https://discord.gg/E4SFJKRPbg).
+
+Or try it right now — install Lore and start a local server in demo mode:
+
+**macOS / Linux**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EpicGames/lore/main/scripts/install.sh | bash -s -- --demo
+```
+
+**Windows (PowerShell)**
+
+```powershell
+$env:LORE_DEMO=1; irm https://raw.githubusercontent.com/EpicGames/lore/main/scripts/install.ps1 | iex
+```
 
 <sub><a href="#readme-top">(back to top)</a></sub>
 
@@ -67,6 +84,9 @@ Lore is an open source version control system designed for unprecedented scalabi
 - **History you can trust** — Confidently track and manage revisions with Lore's verifiable tamper-evident source of truth.
 - **Intuitive interface** — Enjoy complete one-to-one access to the full Lore functionality via the CLI.
 - **Full-surface API** — Extend, customize, and integrate Lore via C/C++, C#, Rust, Go, Python, or JavaScript.
+
+> [!NOTE]
+> Lore is the built-in version control system for UEFN (Unreal Editor for Fortnite), but today's open source tooling can't yet talk to it: the UEFN build uses a proprietary compression format that can't ship with the open source project. We're actively moving UEFN onto an open compression format — the same one this open source project uses — to eliminate the gap between the two.
 
 <sub><a href="#readme-top">(back to top)</a></sub>
 
