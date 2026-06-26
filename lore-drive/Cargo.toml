@@ -1,8 +1,23 @@
-# mockup of expected Cargo/bin app
 [package]
 name = "lore-drive"
-edition = "2024"
 version = "0.1.0"
+edition = "2024"
+description = "Axum/Tokio REST backend that exposes a lore workspace as a browsable file tree"
+
+[[bin]]
+name = "lore-drive"
+path = "src/main.rs"
 
 [dependencies]
-#...
+# HTTP server
+axum = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Lore types (for Address, Hash, Context, Partition)
+lore-base = { workspace = true }
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
