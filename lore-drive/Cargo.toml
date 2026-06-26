@@ -1,0 +1,8 @@
+# mockup of expected Cargo/bin app
+[package]
+name = "lore-drive"
+edition = "2024"
+version = "0.1.0"
+
+[dependencies]
+#...
