@@ -2603,6 +2603,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-drive"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "lore",
+ "lore-base",
+ "lore-revision",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lore-error-set"
 version = "0.1.0"
 dependencies = [

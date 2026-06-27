@@ -2,7 +2,7 @@
 
 ## 1. Setup
 
-Firstly, apply RUST.md HANDOFF to correctly setup the required Rust toolchain.
+Firstly, apply RUST.md to correctly setup the required Rust toolchain.
 (the workspace uses edition 2024 which requires Rust ≥ 1.85):
 
 Verify the workspace root `Cargo.toml` references `lore-drive` in `members` —
@@ -11,7 +11,8 @@ it already does as of the commit that accompanies this HANDOFF.
 ## 2. Tasks (see below)
 
 Then I want you to perform the tasks not yet done in below Tasks section.
-For that you need to clone <https://github.com/nsauzede/lore.git> and checkout branch f-drive.
+For that you need to clone <https://github.com/nsauzede/lore.git> and checkout branch f-drive
+(be smart and remove any local/previous `lore` destination path!).
 
 ## 3. Check
 
@@ -23,13 +24,42 @@ Then I want you to update the present HANDOFF.md + any other relevant documents 
 for your future self to take over new tasks I'll append here (mark as done those which are to keep this HANDOFF clean & maintainable).
 The step 1 (eg: Rust, maybe Sveltekit) shall always be instructed because of peculiar AI's sandbox constraints wrt Rust.
 Eg: if you face any crates version issue in Cargo.toml, please find a working crate set and update it too. Use "=x.y" if required etc.
-Add all your work in a new git commit (use your identity !) then `cargo clean` and create a tarball of the whole project + git history and present
-it as downloadble tarball.
+Add all your work in a new git commit (use your identity !) then `cargo clean` and create a ZIP archive of the whole project + git history and present
+it as downloadble archive file.
 Don't hesitate to enhance this HANDOFF.md if need be.
 
 # Tasks
 
-- [ ] **Scaffold `lore-drive` app** — Create `lore-drive/src/main.rs` (and any
+- [ ] **Attempt a first build + smoke-test** — Now that the `LORE_CONTEXT` panic is
+      fixed, set up a full build environment (see RUST.md + install `protoc` since
+      lore-base/lore-revision pull in tonic/prost which need the protobuf compiler),
+      then run `cargo build -p lore-drive` and address any remaining compile errors.
+      If `protoc` is not available via apt (`apt-get install -y protobuf-compiler`),
+      document the blocker and leave build notes here.
+      After a successful build, point the binary at a real lore workspace and verify:
+      - `curl http://localhost:8080/api/v1/info` returns JSON without panicking.
+      - `curl http://localhost:8080/api/v1/tree` returns the root listing.
+      - `curl http://localhost:8080/api/v1/node/1` returns a valid node record.
+
+- [x] **Fix startup panic** (`cannot access a task-local storage value without
+      setting it first`) — Root cause: `load_and_connect` (and every lore verb)
+      calls `execution_context()` which reads from a tokio task-local
+      (`LORE_CONTEXT`). The previous `main.rs` called `load_and_connect` directly
+      in the async main body with no task-local set.
+      **Fix applied in `lore-drive/src/main.rs`:**
+      - Extracted the entire workspace-open sequence into a new
+        `open_workspace(workdir)` async fn.
+      - Before calling it, create a startup `ExecutionContext` with
+        `EventDispatcher::no_dispatch()` (no callback needed for init).
+      - Wrap the call in `LORE_CONTEXT.scope(startup_ctx, open_workspace(...))`.
+      - Added imports: `lore_base::runtime::LORE_CONTEXT`,
+        `lore_revision::interface::ExecutionContext`,
+        `lore_revision::relay::EventDispatcher`.
+      - Per-request handlers are unaffected — they already get their own
+        `LORE_CONTEXT` scope via the internal `revision_tree_call`/`storage_call`
+        dispatch helpers inside the lore crate.
+
+- [x] **Scaffold `lore-drive` app** — Create `lore-drive/src/main.rs` (and any
       needed `src/*.rs` modules) implementing the three endpoints specified in
       `REST_API.md`.  The implementation requirements are:
 
@@ -59,12 +89,6 @@ Don't hesitate to enhance this HANDOFF.md if need be.
       **CORS**
       - Attach `tower_http::cors::CorsLayer::permissive()` so the future SvelteKit
         frontend on a different port can reach the API in development.
-
-      **Do not build/test yet** — the workspace has heavy proto/tonic dependencies
-      that require protoc; leave compilation for a session that sets that up.
-      Focus on writing correct, idiomatic Rust code that will compile once the
-      build environment is ready.  You may run `cargo check -p lore-drive` if
-      protoc is available, but do not block the commit on it.
 
 - [x] **Design REST_API.md** — Produced `lore-drive/REST_API.md`: a rigorous
       specification of the three read-only endpoints (`GET /api/v1/info`,
